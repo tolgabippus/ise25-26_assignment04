@@ -81,23 +81,127 @@ public class PosServiceImpl implements PosService {
 
     /**
      * Converts an OSM node to a POS domain object.
-     * Note: This is a stub implementation and should be replaced with real mapping logic.
+     * Extracts relevant tags from OSM data and maps them to POS fields.
+     * Validates that all required fields are present.
+     *
+     * @param osmNode the OSM node to convert
+     * @return a POS domain object
+     * @throws OsmNodeMissingFieldsException if required fields are missing or invalid
      */
     private @NonNull Pos convertOsmNodeToPos(@NonNull OsmNode osmNode) {
-        if (osmNode.nodeId().equals(5589879349L)) {
-            return Pos.builder()
-                    .name("Rada Coffee & Rösterei")
-                    .description("Caffé und Rösterei")
-                    .type(PosType.CAFE)
-                    .campus(CampusType.ALTSTADT)
-                    .street("Untere Straße")
-                    .houseNumber("21")
-                    .postalCode(69117)
-                    .city("Heidelberg")
-                    .build();
-        } else {
+        log.debug("Converting OSM node {} to POS", osmNode.nodeId());
+
+        // Extract required tags
+        String name = osmNode.getTag("name", null);
+        String street = osmNode.getTag("addr:street", null);
+        String houseNumber = osmNode.getTag("addr:housenumber", null);
+        String postalCodeStr = osmNode.getTag("addr:postcode", null);
+        String city = osmNode.getTag("addr:city", null);
+
+        // Validate required fields
+        if (name == null || name.isBlank()) {
+            log.error("OSM node {} is missing required field: name", osmNode.nodeId());
             throw new OsmNodeMissingFieldsException(osmNode.nodeId());
         }
+        if (street == null || street.isBlank()) {
+            log.error("OSM node {} is missing required field: addr:street", osmNode.nodeId());
+            throw new OsmNodeMissingFieldsException(osmNode.nodeId());
+        }
+        if (houseNumber == null || houseNumber.isBlank()) {
+            log.error("OSM node {} is missing required field: addr:housenumber", osmNode.nodeId());
+            throw new OsmNodeMissingFieldsException(osmNode.nodeId());
+        }
+        if (postalCodeStr == null || postalCodeStr.isBlank()) {
+            log.error("OSM node {} is missing required field: addr:postcode", osmNode.nodeId());
+            throw new OsmNodeMissingFieldsException(osmNode.nodeId());
+        }
+        if (city == null || city.isBlank()) {
+            log.error("OSM node {} is missing required field: addr:city", osmNode.nodeId());
+            throw new OsmNodeMissingFieldsException(osmNode.nodeId());
+        }
+
+        // Parse postal code
+        Integer postalCode;
+        try {
+            postalCode = Integer.parseInt(postalCodeStr.trim());
+        } catch (NumberFormatException e) {
+            log.error("OSM node {} has invalid postal code: {}", osmNode.nodeId(), postalCodeStr);
+            throw new OsmNodeMissingFieldsException(osmNode.nodeId());
+        }
+
+        // Map amenity tag to PosType
+        String amenity = osmNode.getTag("amenity", "").toLowerCase().trim();
+        PosType type = switch (amenity) {
+            case "cafe", "restaurant", "coffee_shop" -> PosType.CAFE;
+            case "bakery", "bakehouse", "pastry_shop" -> PosType.BAKERY;
+            case "vending_machine" -> PosType.VENDING_MACHINE;
+            default -> {
+                log.warn("Unknown amenity type '{}' for OSM node {}, defaulting to CAFE", amenity, osmNode.nodeId());
+                yield PosType.CAFE;
+            }
+        };
+
+        // Extract optional fields with fallbacks
+        String description = osmNode.getTag("description", "");
+        if (description.isBlank()) {
+            description = osmNode.getTag("operator", "");
+        }
+        if (description.isBlank()) {
+            description = osmNode.getTag("cuisine", "");
+        }
+        if (description.isBlank()) {
+            // Use amenity type as fallback description
+            description = switch (type) {
+                case CAFE -> "Café";
+                case BAKERY -> "Bakery";
+                case VENDING_MACHINE -> "Vending Machine";
+                case CAFETERIA -> "Cafeteria";
+            };
+        }
+
+        // Determine campus based on location
+        // TODO: This is a simplified implementation. In production, you might want to use
+        // the lat/lon coordinates to determine the campus more accurately.
+        CampusType campus = determineCampusFromAddress(city, street, osmNode.lat(), osmNode.lon());
+
+        // Build and return POS
+        Pos pos = Pos.builder()
+                .name(name)
+                .description(description)
+                .type(type)
+                .campus(campus)
+                .street(street)
+                .houseNumber(houseNumber)
+                .postalCode(postalCode)
+                .city(city)
+                .build();
+
+        log.debug("Successfully converted OSM node {} to POS '{}'", osmNode.nodeId(), pos.name());
+        return pos;
+    }
+
+    /**
+     * Determines the campus type based on address and coordinates.
+     * This is a simplified implementation that defaults to ALTSTADT.
+     *
+     * @param city the city name
+     * @param street the street name
+     * @param lat the latitude (may be null)
+     * @param lon the longitude (may be null)
+     * @return the determined campus type
+     */
+    private @NonNull CampusType determineCampusFromAddress(@NonNull String city, @NonNull String street, Double lat, Double lon) {
+        // Simplified heuristics - in production, you might use a more sophisticated approach
+        // such as geofencing with lat/lon coordinates or a database lookup
+
+        // Default to ALTSTADT for Heidelberg
+        if (city.toLowerCase().contains("heidelberg")) {
+            return CampusType.ALTSTADT;
+        }
+
+        // For other cities, default to ALTSTADT
+        log.debug("Defaulting to ALTSTADT campus for city: {}", city);
+        return CampusType.ALTSTADT;
     }
 
     /**
